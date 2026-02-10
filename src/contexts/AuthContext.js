@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: © 2025 Siemens AG
 // SPDX-FileContributor: Sourav Bhowmik <sourav.bhowmik@siemens.com>
 // SPDX-FileContributor: Dearsh Oberoi <dearsh.oberoi@siemens.com>
+// SPDX-FileContributor: 2025 Chayan Das <01chayandas@gmail.com>
 
 import React, { useContext, useEffect } from 'react';
 import axios from 'axios';
@@ -19,23 +20,33 @@ export function useAuth() {
 
 export function AuthProvider({ children }) {
 	useEffect(() => {
-		if (process.env.REACT_APP_PROVIDER === 'oidc') {
-			const interval = setInterval(
-				getAccessTokenFromRefreshToken,
-				30 * 60 * MILLISEC,
-			); // every 30 minutes
+		const interval = setInterval(
+			() => {
+				const refresh_token = localStorage.getItem(
+					'licensedb.refresh_token',
+				);
+				if (refresh_token) {
+					getAccessTokenFromRefreshToken();
+				}
+			},
+			30 * 60 * MILLISEC,
+		); // every 30 minutes
 
-			return () => clearInterval(interval);
-		}
+		return () => clearInterval(interval);
 	}, []);
 
 	async function Signin(userCredentialsPayload) {
 		try {
 			const url = `${process.env.REACT_APP_BASE_URL}/login`;
-			const response = await axios.post(url, userCredentialsPayload);
-			localStorage.setItem('licensedb.token', response.data.token);
+			const { data } = await axios.post(url, userCredentialsPayload);
+			const { access_token, refresh_token, expires_in } = data.data;
 
-			const user = await fetchUserProfile(response.data.token);
+			localStorage.setItem('licensedb.token', access_token);
+			localStorage.setItem('licensedb.refresh_token', refresh_token);
+			let expires_at = Date.now() + expires_in * MILLISEC;
+			localStorage.setItem('licensedb.expires_at', expires_at);
+
+			const user = await fetchUserProfile(access_token);
 			localStorage.setItem(
 				'licensedb.user',
 				JSON.stringify(user.data[0]),
@@ -163,32 +174,55 @@ async function getAccessTokenFromRefreshToken() {
 	let expires_at = null;
 	try {
 		const refresh_token = localStorage.getItem('licensedb.refresh_token');
-
-		const response = await axios.post(
-			process.env.REACT_APP_TOKEN_URL,
-			{
-				grant_type: 'refresh_token',
-				client_id: process.env.REACT_APP_CLIENT_ID,
-				refresh_token: refresh_token,
-				scope: 'openid',
-			},
-			{
-				headers: {
-					'Content-Type': 'application/x-www-form-urlencoded',
+		if (process.env.REACT_APP_PROVIDER === 'oidc') {
+			const response = await axios.post(
+				process.env.REACT_APP_TOKEN_URL,
+				{
+					grant_type: 'refresh_token',
+					client_id: process.env.REACT_APP_CLIENT_ID,
+					refresh_token: refresh_token,
+					scope: 'openid',
 				},
-			},
-		);
+				{
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+					},
+				},
+			);
 
-		token = response.data.id_token;
-		new_refresh_token = response.data.refresh_token;
-		expires_at = Date.now() + response.data.expires_in * MILLISEC;
+			token = response.data.id_token;
+			new_refresh_token = response.data.refresh_token;
+			expires_at = Date.now() + response.data.expires_in * MILLISEC;
 
-		const user = await fetchUserProfile(token);
+			const user = await fetchUserProfile(token);
 
-		localStorage.setItem('licensedb.token', token);
-		localStorage.setItem('licensedb.expires_at', expires_at);
-		localStorage.setItem('licensedb.refresh_token', new_refresh_token);
-		localStorage.setItem('licensedb.user', JSON.stringify(user.data[0]));
+			localStorage.setItem('licensedb.token', token);
+			localStorage.setItem('licensedb.expires_at', expires_at);
+			localStorage.setItem('licensedb.refresh_token', new_refresh_token);
+			localStorage.setItem(
+				'licensedb.user',
+				JSON.stringify(user.data[0]),
+			);
+		} else {
+			// local
+			const url = `${process.env.REACT_APP_BASE_URL}/refresh-token`;
+			const { data } = await axios.post(url, {
+				refresh_token: refresh_token,
+			});
+			token = data.data.access_token;
+			new_refresh_token = data.data.refresh_token;
+			expires_at = Date.now() + data.data.expires_in * MILLISEC;
+
+			const user = await fetchUserProfile(token);
+
+			localStorage.setItem('licensedb.token', token);
+			localStorage.setItem('licensedb.expires_at', expires_at);
+			localStorage.setItem('licensedb.refresh_token', new_refresh_token);
+			localStorage.setItem(
+				'licensedb.user',
+				JSON.stringify(user.data[0]),
+			);
+		}
 	} catch (e) {
 		if (e.response?.data?.status) {
 			if (e.response.data.status !== 409) {
@@ -217,10 +251,7 @@ export async function GetToken() {
 	const expires_at = localStorage.getItem('licensedb.expires_at');
 	let token = localStorage.getItem('licensedb.token');
 	const BUFFER_TIME = 60 * MILLISEC * 10; // 10 mins
-	if (
-		Date.now() >= Number(expires_at) - BUFFER_TIME &&
-		process.env.REACT_APP_PROVIDER === 'oidc'
-	) {
+	if (Date.now() >= Number(expires_at) - BUFFER_TIME) {
 		await getAccessTokenFromRefreshToken();
 		token = localStorage.getItem('licensedb.token');
 	}
