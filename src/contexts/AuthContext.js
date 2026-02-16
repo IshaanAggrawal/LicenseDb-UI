@@ -38,13 +38,14 @@ export function AuthProvider({ children }) {
 	async function Signin(userCredentialsPayload) {
 		try {
 			const url = `${process.env.REACT_APP_BASE_URL}/login`;
-			const { data } = await axios.post(url, userCredentialsPayload);
-			const { access_token, refresh_token, expires_in } = data.data;
 
+			const { data } = await axios.post(url, userCredentialsPayload);
+			const { access_token, refresh_token, expires_at } = data.data;
+
+			const expiresAtMs = new Date(expires_at).getTime();
 			localStorage.setItem('licensedb.token', access_token);
 			localStorage.setItem('licensedb.refresh_token', refresh_token);
-			let expires_at = Date.now() + expires_in * MILLISEC;
-			localStorage.setItem('licensedb.expires_at', expires_at);
+			localStorage.setItem('licensedb.expires_at', expiresAtMs);
 
 			const user = await fetchUserProfile(access_token);
 			localStorage.setItem(
@@ -211,8 +212,7 @@ async function getAccessTokenFromRefreshToken() {
 			});
 			token = data.data.access_token;
 			new_refresh_token = data.data.refresh_token;
-			expires_at = Date.now() + data.data.expires_in * MILLISEC;
-
+			expires_at = new Date(data.data.expires_at).getTime();
 			const user = await fetchUserProfile(token);
 
 			localStorage.setItem('licensedb.token', token);
